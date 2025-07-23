@@ -2,26 +2,49 @@
  * Content processor for different types of streaming content
  */
 
+import type { SSEMessageBuilder } from './SSEMessageBuilder.js';
+import type { RequestLogger } from '../../utils/requestLogger.js';
+
+interface ToolCall {
+  index: number;
+  id: string;
+  function: {
+    name: string;
+    arguments?: string;
+  };
+}
+
+interface Delta {
+  tool_calls?: ToolCall[];
+  content?: string;
+  reasoning?: string;
+}
+
+interface Usage {
+  completion_tokens?: number;
+}
+
 export class ContentProcessor {
-  constructor(sseBuilder, logger) {
+  private sseBuilder: SSEMessageBuilder;
+  
+  // State tracking
+  private textBlockStarted: boolean = false;
+  private encounteredToolCall: boolean = false;
+  private toolCallAccumulators: Record<number, string> = {};
+  
+  // Accumulated content
+  private accumulatedContent: string = '';
+  private accumulatedReasoning: string = '';
+
+  constructor(sseBuilder: SSEMessageBuilder, _logger?: RequestLogger) {
     this.sseBuilder = sseBuilder;
-    this.logger = logger;
-    
-    // State tracking
-    this.textBlockStarted = false;
-    this.encounteredToolCall = false;
-    this.toolCallAccumulators = {};
-    
-    // Accumulated content
-    this.accumulatedContent = '';
-    this.accumulatedReasoning = '';
+    // Logger reserved for future use
   }
 
   /**
    * Process tool call delta
-   * @param {Object} toolCall - Tool call data
    */
-  processToolCall(toolCall) {
+  processToolCall(toolCall: ToolCall): void {
     this.encounteredToolCall = true;
     const idx = toolCall.index;
 
@@ -44,9 +67,8 @@ export class ContentProcessor {
 
   /**
    * Process content delta
-   * @param {string} content - Content delta
    */
-  processContent(content) {
+  processContent(content: string): void {
     if (!this.textBlockStarted) {
       this.textBlockStarted = true;
       this.sseBuilder.sendTextBlockStart(0);
@@ -58,9 +80,8 @@ export class ContentProcessor {
 
   /**
    * Process reasoning delta
-   * @param {string} reasoning - Reasoning delta
    */
-  processReasoning(reasoning) {
+  processReasoning(reasoning: string): void {
     if (!this.textBlockStarted) {
       this.textBlockStarted = true;
       this.sseBuilder.sendTextBlockStart(0);
@@ -72,9 +93,8 @@ export class ContentProcessor {
 
   /**
    * Process stream data delta
-   * @param {Object} delta - Delta object from OpenRouter
    */
-  processDelta(delta) {
+  processDelta(delta: Delta): void {
     if (!delta) return;
 
     // Process different types of deltas
@@ -90,7 +110,7 @@ export class ContentProcessor {
   /**
    * Send content block stop events
    */
-  sendContentBlockStops() {
+  sendContentBlockStops(): void {
     if (this.encounteredToolCall) {
       // Send stop for each tool call block
       Object.keys(this.toolCallAccumulators).forEach(idx => {
@@ -104,10 +124,8 @@ export class ContentProcessor {
 
   /**
    * Calculate output tokens
-   * @param {Object} usage - Usage data from API
-   * @returns {number} - Output token count
    */
-  calculateOutputTokens(usage) {
+  calculateOutputTokens(usage?: Usage): number {
     if (usage?.completion_tokens) {
       return usage.completion_tokens;
     }
@@ -120,9 +138,13 @@ export class ContentProcessor {
 
   /**
    * Get accumulated content state
-   * @returns {Object} - Content state
    */
-  getContentState() {
+  getContentState(): {
+    accumulatedContent: string;
+    accumulatedReasoning: string;
+    encounteredToolCall: boolean;
+    toolCalls: Record<number, string> | null;
+  } {
     return {
       accumulatedContent: this.accumulatedContent,
       accumulatedReasoning: this.accumulatedReasoning,
@@ -135,9 +157,8 @@ export class ContentProcessor {
 
   /**
    * Get stop reason based on content type
-   * @returns {string} - Stop reason
    */
-  getStopReason() {
+  getStopReason(): string {
     return this.encounteredToolCall ? 'tool_use' : 'end_turn';
   }
 }

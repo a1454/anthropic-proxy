@@ -11,18 +11,18 @@ export const StreamingStates = {
   FINALIZING: 'finalizing',
   COMPLETED: 'completed',
   ERROR: 'error'
-};
+} as const;
+
+export type StreamingState = typeof StreamingStates[keyof typeof StreamingStates];
 
 export class StreamStateManager {
-  constructor() {
-    this.state = StreamingStates.INITIALIZING;
-    this.isSucceeded = false;
-  }
+  private state: StreamingState = StreamingStates.INITIALIZING;
+  private isSucceeded: boolean = false;
 
   /**
    * Transition to streaming state
    */
-  startStreaming() {
+  startStreaming(): boolean {
     if (this.isSucceeded) return false;
     this.isSucceeded = true;
     this.state = StreamingStates.STREAMING;
@@ -32,62 +32,56 @@ export class StreamStateManager {
   /**
    * Transition to finalizing state
    */
-  startFinalizing() {
+  startFinalizing(): void {
     this.state = StreamingStates.FINALIZING;
   }
 
   /**
    * Transition to completed state
    */
-  complete() {
+  complete(): void {
     this.state = StreamingStates.COMPLETED;
   }
 
   /**
    * Transition to error state
    */
-  setError() {
+  setError(): void {
     this.state = StreamingStates.ERROR;
   }
 
   /**
    * Check if in a specific state
-   * @param {string} state - State to check
-   * @returns {boolean}
    */
-  isInState(state) {
+  isInState(state: StreamingState): boolean {
     return this.state === state;
   }
 
   /**
    * Check if streaming is active
-   * @returns {boolean}
    */
-  isStreaming() {
+  isStreaming(): boolean {
     return this.state === StreamingStates.STREAMING;
   }
 
   /**
    * Check if stream is completed
-   * @returns {boolean}
    */
-  isCompleted() {
+  isCompleted(): boolean {
     return this.state === StreamingStates.COMPLETED;
   }
 
   /**
    * Check if stream has error
-   * @returns {boolean}
    */
-  hasError() {
+  hasError(): boolean {
     return this.state === StreamingStates.ERROR;
   }
 
   /**
    * Get current state
-   * @returns {string}
    */
-  getState() {
+  getState(): StreamingState {
     return this.state;
   }
 }

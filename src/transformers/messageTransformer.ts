@@ -2,31 +2,44 @@
  * Message transformation utilities for converting between Anthropic and OpenAI formats
  */
 
+import type { 
+  AnthropicContentBlock, 
+  AnthropicSystemMessage,
+  OpenRouterMessage, 
+  OpenRouterToolCall,
+  AnthropicRequest
+} from '../types/index.js';
+
 /**
  * Normalize a message's content.
  * If content is a string, return it directly.
  * If it's an array (of objects with text property), join them.
- * @param {string|Array} content - The content to normalize
- * @returns {string|null} - The normalized content
  */
-export function normalizeContent(content) {
+export function normalizeContent(content: string | AnthropicContentBlock[]): string | null {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
-    return content.map(item => item.text).join(' ');
+    return content
+      .filter(item => item.type === 'text' && item.text)
+      .map(item => item.text)
+      .join(' ');
   }
   return null;
 }
 
 /**
  * Transform system messages from Anthropic format to OpenAI format
- * @param {Array} systemMessages - Array of system messages
- * @returns {Array} - Array of OpenAI format messages
  */
-export function transformSystemMessages(systemMessages) {
-  const messages = [];
-  if (systemMessages && Array.isArray(systemMessages)) {
+export function transformSystemMessages(systemMessages?: string | AnthropicSystemMessage[]): OpenRouterMessage[] {
+  const messages: OpenRouterMessage[] = [];
+  
+  if (typeof systemMessages === 'string') {
+    messages.push({
+      role: 'system',
+      content: systemMessages
+    });
+  } else if (systemMessages && Array.isArray(systemMessages)) {
     systemMessages.forEach(sysMsg => {
-      const normalized = normalizeContent(sysMsg.text || sysMsg.content);
+      const normalized = normalizeContent(sysMsg.text);
       if (normalized) {
         messages.push({
           role: 'system',
@@ -35,42 +48,52 @@ export function transformSystemMessages(systemMessages) {
       }
     });
   }
+  
   return messages;
 }
 
 /**
  * Transform tool calls from Anthropic format to OpenAI format
- * @param {Array} content - Message content array
- * @returns {Array} - Array of OpenAI format tool calls
  */
-export function transformToolCalls(content) {
-  const toolCallItems = Array.isArray(content) ? content : [];
-  return toolCallItems
-    .filter(item => item.type === 'tool_use')
+export function transformToolCalls(content: string | AnthropicContentBlock[]): OpenRouterToolCall[] {
+  const contentItems = Array.isArray(content) ? content : [];
+  return contentItems
+    .filter((item): item is AnthropicContentBlock => 
+      item.type === 'tool_use' && Boolean(item.id && item.name)
+    )
     .map(toolCall => ({
-      id: toolCall.id,
-      type: 'function',
+      id: toolCall.id!,
+      type: 'function' as const,
       function: {
-        name: toolCall.name,
-        arguments: JSON.stringify(toolCall.input),
+        name: toolCall.name!,
+        arguments: JSON.stringify(toolCall.input || {}),
       }
     }));
 }
 
 /**
  * Transform tool results from Anthropic format to OpenAI format
- * @param {Array} content - Message content array
- * @returns {Array} - Array of OpenAI format tool result messages
  */
-export function transformToolResults(content) {
-  const messages = [];
+export function transformToolResults(content: string | AnthropicContentBlock[]): OpenRouterMessage[] {
+  const messages: OpenRouterMessage[] = [];
   if (Array.isArray(content)) {
-    const toolResults = content.filter(item => item.type === 'tool_result');
+    const toolResults = content.filter((item): item is AnthropicContentBlock => 
+      item.type === 'tool_result' && Boolean(item.tool_use_id)
+    );
+    
     toolResults.forEach(toolResult => {
+      let resultContent = '';
+      
+      if (typeof toolResult.content === 'string') {
+        resultContent = toolResult.content;
+      } else if (Array.isArray(toolResult.content)) {
+        resultContent = normalizeContent(toolResult.content) || '';
+      }
+      
       messages.push({
         role: 'tool',
-        content: toolResult.text || toolResult.content,
-        tool_call_id: toolResult.tool_use_id,
+        content: resultContent,
+        tool_call_id: toolResult.tool_use_id!,
       });
     });
   }
@@ -79,25 +102,23 @@ export function transformToolResults(content) {
 
 /**
  * Transform all messages from Anthropic format to OpenAI format
- * @param {Object} payload - The Anthropic API payload
- * @returns {Array} - Array of OpenAI format messages
  */
-export function transformMessages(payload) {
-  const messages = [];
+export function transformMessages(payload: AnthropicRequest): OpenRouterMessage[] {
+  const messages: OpenRouterMessage[] = [];
 
   // Add system messages
   messages.push(...transformSystemMessages(payload.system));
 
   // Process messages with proper tool call/result sequencing
   if (payload.messages && Array.isArray(payload.messages)) {
-    const toolCallTracker = new Set(); // Track tool call IDs to ensure proper pairing
+    const toolCallTracker = new Set<string>(); // Track tool call IDs to ensure proper pairing
     
     payload.messages.forEach(msg => {
       // Process different message types
       if (msg.role === 'assistant') {
         // Assistant messages may contain tool calls
         const toolCalls = transformToolCalls(msg.content);
-        const newMsg = { role: msg.role };
+        const newMsg: OpenRouterMessage = { role: msg.role, content: '' };
         const normalized = normalizeContent(msg.content);
         
         // Add text content if present
@@ -126,14 +147,22 @@ export function transformMessages(payload) {
         
         // Add tool results as separate tool messages ONLY if they match tracked calls
         toolResults.forEach(toolResult => {
+          let resultContent = '';
+          
+          if (typeof toolResult.content === 'string') {
+            resultContent = toolResult.content;
+          } else if (Array.isArray(toolResult.content)) {
+            resultContent = normalizeContent(toolResult.content) || '';
+          }
+          
           messages.push({
             role: 'tool',
-            content: toolResult.text || toolResult.content,
-            tool_call_id: toolResult.tool_use_id,
+            content: resultContent,
+            tool_call_id: toolResult.tool_use_id!,
           });
           
           // Remove from tracker as it's now been handled
-          toolCallTracker.delete(toolResult.tool_use_id);
+          toolCallTracker.delete(toolResult.tool_use_id!);
         });
         
         // Add regular user message content
@@ -150,7 +179,7 @@ export function transformMessages(payload) {
         const normalized = normalizeContent(msg.content);
         if (normalized) {
           messages.push({
-            role: msg.role,
+            role: msg.role as 'system' | 'user' | 'assistant' | 'tool',
             content: normalized
           });
         }
@@ -163,15 +192,17 @@ export function transformMessages(payload) {
 
 /**
  * Extract tool results that have corresponding tool calls
- * @param {Array} content - Message content array
- * @param {Set} toolCallTracker - Set of valid tool call IDs
- * @returns {Array} - Array of valid tool results
  */
-function extractValidToolResults(content, toolCallTracker) {
+function extractValidToolResults(
+  content: string | AnthropicContentBlock[], 
+  toolCallTracker: Set<string>
+): AnthropicContentBlock[] {
   if (!Array.isArray(content)) return [];
   
   return content
-    .filter(item => item.type === 'tool_result')
+    .filter((item): item is AnthropicContentBlock => 
+      item.type === 'tool_result' && Boolean(item.tool_use_id)
+    )
     .filter(toolResult => {
       // Only include tool results that have corresponding tool calls
       return toolResult.tool_use_id && toolCallTracker.has(toolResult.tool_use_id);

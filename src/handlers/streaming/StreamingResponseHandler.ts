@@ -2,21 +2,57 @@
  * Refactored streaming response handler using modular components
  */
 
-import { ProxyError, ErrorTypes } from '../../utils/errorHandler.js';
+import type { FastifyReply } from 'fastify';
+import { ProxyError } from '../../utils/errorHandler.js';
 import { BufferManager } from './BufferManager.js';
 import { SSEMessageBuilder } from './SSEMessageBuilder.js';
 import { ContentProcessor } from './ContentProcessor.js';
-import { StreamStateManager, StreamingStates } from './StreamStateManager.js';
+import { StreamStateManager } from './StreamStateManager.js';
+import type { RequestLogger } from '../../utils/requestLogger.js';
+
+interface StreamingChoice {
+  delta?: {
+    tool_calls?: Array<{
+      index: number;
+      id: string;
+      function: {
+        name: string;
+        arguments?: string;
+      };
+    }>;
+    content?: string;
+    reasoning?: string;
+  };
+}
+
+interface StreamingData {
+  error?: {
+    message: string;
+  };
+  usage?: {
+    completion_tokens?: number;
+  };
+  choices?: StreamingChoice[];
+}
 
 /**
  * Streaming response handler class - orchestrates streaming components
  */
 export class StreamingResponseHandler {
-  constructor(reply, model, logger) {
+  public stateManager: StreamStateManager;
+  private reply: FastifyReply;
+  private model: string;
+  private logger: RequestLogger;
+  private usage: any = null;
+  
+  private bufferManager: BufferManager;
+  private sseBuilder: SSEMessageBuilder;
+  private contentProcessor: ContentProcessor;
+
+  constructor(reply: FastifyReply, model: string, logger: RequestLogger) {
     this.reply = reply;
     this.model = model;
     this.logger = logger;
-    this.usage = null;
     
     // Initialize components
     this.stateManager = new StreamStateManager();
@@ -28,7 +64,7 @@ export class StreamingResponseHandler {
   /**
    * Initialize the streaming response
    */
-  initializeStream() {
+  private initializeStream(): void {
     if (!this.stateManager.startStreaming()) return;
 
     // Set streaming headers
@@ -44,23 +80,26 @@ export class StreamingResponseHandler {
 
   /**
    * Process parsed streaming data
-   * @param {Object} parsed - Parsed streaming data
    */
-  processStreamData(parsed) {
+  private processStreamData(parsed: StreamingData): void {
     if (parsed.error) {
       this.stateManager.setError();
       
       // Create structured error with rich context
-      throw new ProxyError(
-        `Streaming error: ${parsed.error.message}`,
-        ErrorTypes.STREAMING_ERROR,
-        500,
-        parsed.error
-      ).withContext({
-        ...this.contentProcessor.getContentState(),
-        model: this.model,
-        state: this.stateManager.getState(),
-        type: 'streaming_error'
+      throw new ProxyError({
+        type: 'STREAMING_ERROR',
+        message: `Streaming error: ${parsed.error.message}`,
+        statusCode: 500,
+        cause: new Error(parsed.error.message),
+        context: {
+          timestamp: Date.now(),
+          operation: 'streaming_error',
+          model: this.model,
+          state: this.stateManager.getState(),
+          metadata: {
+            ...this.contentProcessor.getContentState()
+          }
+        }
       });
     }
 
@@ -73,20 +112,21 @@ export class StreamingResponseHandler {
 
     // Process delta through content processor
     const delta = parsed.choices?.[0]?.delta;
-    this.contentProcessor.processDelta(delta);
+    if (delta) {
+      this.contentProcessor.processDelta(delta);
+    }
   }
 
   /**
    * Finalize the streaming response
    */
-  finalizeStream() {
+  private finalizeStream(): void {
     this.stateManager.startFinalizing();
 
     const contentState = this.contentProcessor.getContentState();
     
     // Log the complete streaming response
-    this.logger.log({
-      type: 'streaming_response_complete',
+    this.logger.info('Streaming response complete', {
       ...contentState,
       usage: this.usage,
       model: this.model
@@ -99,7 +139,7 @@ export class StreamingResponseHandler {
     const outputTokens = this.contentProcessor.calculateOutputTokens(this.usage);
     const stopReason = this.contentProcessor.getStopReason();
     
-    this.sseBuilder.sendMessageDelta(stopReason, outputTokens);
+    this.sseBuilder.sendMessageDeltaWithStop(stopReason, outputTokens);
     this.sseBuilder.sendMessageStop();
 
     this.stateManager.complete();
@@ -108,10 +148,8 @@ export class StreamingResponseHandler {
 
   /**
    * Split line on data: boundaries to handle multiple JSON objects in one line
-   * @param {string} line - Line that may contain multiple data: entries
-   * @returns {Array<string>} - Array of individual data entries
    */
-  splitDataEntries(line) {
+  private splitDataEntries(line: string): string[] {
     const trimmed = line.trim();
     if (!trimmed) return [];
     
@@ -122,10 +160,8 @@ export class StreamingResponseHandler {
 
   /**
    * Process a single data entry with buffer management
-   * @param {string} dataEntry - Single data: entry to process
-   * @returns {boolean} - Whether processing should continue
    */
-  processDataEntry(dataEntry) {
+  private processDataEntry(dataEntry: string): boolean {
     const trimmed = dataEntry.trim();
     if (!trimmed.startsWith('data:')) return true;
 
@@ -136,42 +172,49 @@ export class StreamingResponseHandler {
     }
 
     // Handle buffer timeout
-    if (this.bufferManager.isBuffering && this.bufferManager.isBufferTimedOut()) {
-      const bufferState = this.bufferManager.getBufferState();
-      this.logger.log({
-        type: 'json_buffer_timeout',
-        ...bufferState
-      });
+    const bufferStatus = this.bufferManager.getBufferStatus();
+    if (bufferStatus.isBuffering) {
+      const bufferState = this.bufferManager.getBufferStatus();
+      this.logger.warn('JSON buffer timeout', bufferState);
       
       this.stateManager.setError();
-      throw new ProxyError(
-        'JSON buffer timeout - incomplete data received',
-        ErrorTypes.STREAMING_ERROR,
-        500
-      ).withContext({
-        ...bufferState,
-        type: 'json_buffer_timeout'
+      throw new ProxyError({
+        type: 'STREAMING_ERROR',
+        message: 'JSON buffer timeout - incomplete data received',
+        statusCode: 500,
+        context: {
+          timestamp: Date.now(),
+          operation: 'json_buffer_timeout',
+          ...bufferState
+        }
       });
     }
 
     // Add to buffer if we're currently buffering
-    if (this.bufferManager.isBuffering) {
+    const currentStatus = this.bufferManager.getBufferStatus();
+    if (currentStatus.isBuffering) {
       try {
-        this.bufferManager.addToBuffer(dataStr);
+        this.bufferManager.addToJsonBuffer(dataStr);
       } catch (error) {
         this.stateManager.setError();
-        throw new ProxyError(
-          error.message,
-          ErrorTypes.STREAMING_ERROR,
-          500
-        ).withContext({
-          ...this.bufferManager.getBufferState(),
-          type: 'json_buffer_overflow'
+        throw new ProxyError({
+          type: 'STREAMING_ERROR',
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 500,
+          context: {
+            timestamp: Date.now(),
+            operation: 'json_buffer_overflow',
+            ...this.bufferManager.getBufferStatus()
+          }
         });
       }
       
       // Try to parse the buffered data
-      return this.processBufferedJson(this.bufferManager.jsonBuffer);
+      const bufferedData = this.bufferManager.flushJsonBuffer();
+      if (bufferedData) {
+        return this.processBufferedJson(bufferedData);
+      }
+      return true;
     }
 
     // Try to parse the current data directly
@@ -179,34 +222,10 @@ export class StreamingResponseHandler {
       const parsed = JSON.parse(dataStr);
       this.processStreamData(parsed);
     } catch (error) {
-      // Check if this is a recoverable error
-      if (this.bufferManager.isRecoverableJsonError(error)) {
-        // Start buffering
-        this.bufferManager.startBuffering(dataStr, error.message);
-        return true; // Continue processing, waiting for more data
-      }
-      
-      // For other JSON errors, fail immediately
-      this.stateManager.setError();
-      
-      this.logger.log({
-        type: 'json_parse_error_permanent',
-        error: error.message,
-        raw_data: dataStr
-      });
-      
-      throw new ProxyError(
-        `Streaming parse error: ${error.message}`,
-        ErrorTypes.STREAMING_ERROR,
-        500,
-        error
-      ).withContext({
-        raw_data: dataStr,
-        ...this.contentProcessor.getContentState(),
-        model: this.model,
-        state: this.stateManager.getState(),
-        type: 'streaming_parse_error'
-      });
+      // Start buffering on JSON parse error
+      this.bufferManager.startJsonBuffering();
+      this.bufferManager.addToJsonBuffer(dataStr);
+      return true; // Continue processing, waiting for more data
     }
 
     return true;
@@ -214,47 +233,47 @@ export class StreamingResponseHandler {
 
   /**
    * Process buffered JSON data
-   * @param {string} jsonData - Complete JSON string to parse
-   * @returns {boolean} - Whether processing should continue
    */
-  processBufferedJson(jsonData) {
+  private processBufferedJson(jsonData: string): boolean {
     try {
       const parsed = JSON.parse(jsonData);
       this.processStreamData(parsed);
-      this.bufferManager.clearBuffer();
+      this.bufferManager.clear();
       return true;
     } catch (error) {
       // If parsing still fails after buffering, it's a permanent error
       this.stateManager.setError();
       
-      const bufferState = this.bufferManager.getBufferState();
-      this.logger.log({
-        type: 'json_buffer_parse_error',
-        error: error.message,
-        ...bufferState
+      const bufferState = this.bufferManager.getBufferStatus();
+      this.logger.error('JSON buffer parse error', error instanceof Error ? error : new Error(String(error)), {
+        timestamp: Date.now(),
+        operation: 'json_buffer_parse',
+        metadata: bufferState
       });
       
-      throw new ProxyError(
-        `Buffered JSON parse error: ${error.message}`,
-        ErrorTypes.STREAMING_ERROR,
-        500,
-        error
-      ).withContext({
-        ...bufferState,
-        ...this.contentProcessor.getContentState(),
-        model: this.model,
-        state: this.stateManager.getState(),
-        type: 'buffered_streaming_parse_error'
+      throw new ProxyError({
+        type: 'STREAMING_ERROR',
+        message: `Buffered JSON parse error: ${error instanceof Error ? error.message : String(error)}`,
+        statusCode: 500,
+        cause: error instanceof Error ? error : new Error(String(error)),
+        context: {
+          timestamp: Date.now(),
+          operation: 'buffered_streaming_parse_error',
+          model: this.model,
+          state: this.stateManager.getState(),
+          metadata: {
+            ...bufferState,
+            ...this.contentProcessor.getContentState()
+          }
+        }
       });
     }
   }
 
   /**
    * Process a single line of streaming data
-   * @param {string} line - Line to process
-   * @returns {boolean} - Whether processing should continue
    */
-  processLine(line) {
+  processLine(line: string): boolean {
     const trimmed = line.trim();
     if (!trimmed) return true;
     
@@ -277,17 +296,15 @@ export class StreamingResponseHandler {
 
   /**
    * Extract complete lines from chunk
-   * @param {string} chunk - New chunk from stream
-   * @returns {Array<string>} - Complete lines
    */
-  extractCompleteLines(chunk) {
+  extractCompleteLines(chunk: string): string[] {
     return this.bufferManager.extractCompleteLines(chunk);
   }
 
   /**
    * Process remaining line buffer
    */
-  processRemainingLineBuffer() {
+  processRemainingLineBuffer(): void {
     const remaining = this.bufferManager.getRemainingLineBuffer();
     if (remaining.trim()) {
       this.processLine(remaining);
@@ -296,9 +313,8 @@ export class StreamingResponseHandler {
 
   /**
    * Get handler state for error context
-   * @returns {Object} - Handler state
    */
-  getHandlerState() {
+  getHandlerState(): any {
     return {
       ...this.contentProcessor.getContentState(),
       model: this.model,

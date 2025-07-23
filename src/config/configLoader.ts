@@ -1,9 +1,23 @@
 import fs from 'fs';
 import path from 'path';
+import type { 
+  ProxyConfig, 
+  ConfigManager, 
+  ModelConfig
+} from '../types/index.js';
 
 /**
  * Configuration validation schema
  */
+interface ConfigFieldSchema {
+  type: 'string' | 'number' | 'boolean' | 'array' | 'object';
+  required: boolean;
+  min?: number;
+  max?: number;
+}
+
+// ConfigSchema type removed - was unused
+
 const CONFIG_SCHEMA = {
   server: {
     port: { type: 'number', required: true, min: 1, max: 65535 }
@@ -21,19 +35,23 @@ const CONFIG_SCHEMA = {
   },
   logging: {
     logDir: { type: 'string', required: true },
+    directory: { type: 'string', required: true },
     enableDebug: { type: 'boolean', required: true },
     perRequestLogging: { type: 'boolean', required: false }
   },
   tools: {
     excludedTools: { type: 'array', required: false }
-  }
+  },
+  debug: { type: 'boolean', required: true }
 };
 
 /**
  * Validation error class
  */
 class ConfigValidationError extends Error {
-  constructor(message, path) {
+  public readonly path: string;
+
+  constructor(message: string, path: string) {
     super(message);
     this.name = 'ConfigValidationError';
     this.path = path;
@@ -43,7 +61,7 @@ class ConfigValidationError extends Error {
 /**
  * Validate a configuration value against schema
  */
-function validateValue(value, schema, path) {
+function validateValue(value: unknown, schema: ConfigFieldSchema, path: string): void {
   if (schema.required && (value === undefined || value === null)) {
     throw new ConfigValidationError(`Required field missing`, path);
   }
@@ -90,18 +108,26 @@ function validateValue(value, schema, path) {
 /**
  * Recursively validate configuration against schema
  */
-function validateConfig(config, schema, basePath = '') {
+function validateConfig(
+  config: Record<string, unknown>, 
+  schema: Record<string, unknown>, 
+  basePath = ''
+): void {
   for (const [key, fieldSchema] of Object.entries(schema)) {
     const currentPath = basePath ? `${basePath}.${key}` : key;
     const value = config[key];
 
-    if (typeof fieldSchema === 'object' && fieldSchema.type) {
+    if (typeof fieldSchema === 'object' && fieldSchema !== null && 'type' in fieldSchema) {
       // Leaf node validation
-      validateValue(value, fieldSchema, currentPath);
-    } else {
+      validateValue(value, fieldSchema as ConfigFieldSchema, currentPath);
+    } else if (typeof fieldSchema === 'object' && fieldSchema !== null) {
       // Nested object validation
       if (value && typeof value === 'object') {
-        validateConfig(value, fieldSchema, currentPath);
+        validateConfig(
+          value as Record<string, unknown>, 
+          fieldSchema as Record<string, unknown>, 
+          currentPath
+        );
       }
     }
   }
@@ -110,38 +136,41 @@ function validateConfig(config, schema, basePath = '') {
 /**
  * Apply environment variable overrides
  */
-function applyEnvironmentOverrides(config) {
+function applyEnvironmentOverrides(config: ProxyConfig): ProxyConfig {
+  const result = { ...config };
+
   // Server configuration
   if (process.env.PORT) {
-    config.server.port = parseInt(process.env.PORT, 10);
+    result.server.port = parseInt(process.env.PORT, 10);
   }
 
   // API configuration
   if (process.env.ANTHROPIC_PROXY_BASE_URL) {
-    config.api.baseUrl = process.env.ANTHROPIC_PROXY_BASE_URL;
-    config.api.requiresApiKey = false;
+    result.api.baseUrl = process.env.ANTHROPIC_PROXY_BASE_URL;
+    result.api.requiresApiKey = false;
   }
 
   // Model configuration
   if (process.env.REASONING_MODEL) {
-    config.models.reasoning = process.env.REASONING_MODEL;
+    result.models.reasoning = process.env.REASONING_MODEL;
   }
   if (process.env.COMPLETION_MODEL) {
-    config.models.completion = process.env.COMPLETION_MODEL;
+    result.models.completion = process.env.COMPLETION_MODEL;
   }
 
   // Logging configuration
   if (process.env.DEBUG) {
-    config.logging.enableDebug = !!process.env.DEBUG;
+    result.debug = !!process.env.DEBUG;
+    result.logging.enableDebug = !!process.env.DEBUG;
   }
 
-  return config;
+  return result;
 }
 
 /**
  * Load and validate configuration from JSON file
  */
-export function loadConfig(configPath = 'config.json') {
+export function loadConfig(configPath = 'config.json'): ProxyConfig {
   try {
     // Find config file path
     const fullPath = path.resolve(configPath);
@@ -152,24 +181,25 @@ export function loadConfig(configPath = 'config.json') {
 
     // Read and parse JSON
     const configData = fs.readFileSync(fullPath, 'utf8');
-    let config;
+    let config: unknown;
     
     try {
       config = JSON.parse(configData);
     } catch (parseError) {
-      throw new Error(`Invalid JSON in configuration file: ${parseError.message}`);
+      const error = parseError as Error;
+      throw new Error(`Invalid JSON in configuration file: ${error.message}`);
     }
 
     // Apply environment variable overrides
-    config = applyEnvironmentOverrides(config);
+    const configWithOverrides = applyEnvironmentOverrides(config as ProxyConfig);
 
     // Validate configuration
-    validateConfig(config, CONFIG_SCHEMA);
+    validateConfig(configWithOverrides as any, CONFIG_SCHEMA);
 
     // Additional business logic validation
-    validateModelConfigs(config);
+    validateModelConfigs(configWithOverrides);
 
-    return config;
+    return configWithOverrides;
   } catch (error) {
     if (error instanceof ConfigValidationError) {
       throw new Error(`Configuration validation failed at ${error.path}: ${error.message}`);
@@ -181,7 +211,7 @@ export function loadConfig(configPath = 'config.json') {
 /**
  * Validate model-specific configurations
  */
-function validateModelConfigs(config) {
+function validateModelConfigs(config: ProxyConfig): void {
   const { models } = config;
 
   // Check that default models exist in configs
@@ -198,7 +228,7 @@ function validateModelConfigs(config) {
   // Validate model mappings point to existing configs
   if (models.mappings) {
     for (const [mappedName, targetModel] of Object.entries(models.mappings)) {
-      if (!models.configs[targetModel]) {
+      if (typeof targetModel === 'string' && !models.configs[targetModel]) {
         throw new ConfigValidationError(`Mapped model '${targetModel}' for '${mappedName}' not found in model configs`, `models.mappings.${mappedName}`);
       }
     }
@@ -206,14 +236,14 @@ function validateModelConfigs(config) {
 
   // Validate individual model configs
   for (const [modelName, modelConfig] of Object.entries(models.configs)) {
-    if (typeof modelConfig.enabled !== 'boolean') {
-      throw new ConfigValidationError(`Model '${modelName}' must have boolean 'enabled' field`, `models.configs.${modelName}.enabled`);
-    }
-    if (typeof modelConfig.maxTokens !== 'number' || modelConfig.maxTokens <= 0) {
-      throw new ConfigValidationError(`Model '${modelName}' must have positive 'maxTokens' field`, `models.configs.${modelName}.maxTokens`);
-    }
-    if (typeof modelConfig.supportsThinking !== 'boolean') {
+    const config = modelConfig as ModelConfig;
+    
+    if (typeof config.supportsThinking !== 'boolean') {
       throw new ConfigValidationError(`Model '${modelName}' must have boolean 'supportsThinking' field`, `models.configs.${modelName}.supportsThinking`);
+    }
+    
+    if (config.maxTokens !== undefined && (typeof config.maxTokens !== 'number' || config.maxTokens <= 0)) {
+      throw new ConfigValidationError(`Model '${modelName}' must have positive 'maxTokens' field`, `models.configs.${modelName}.maxTokens`);
     }
   }
 }
@@ -221,36 +251,52 @@ function validateModelConfigs(config) {
 /**
  * Create a configuration manager with helper methods
  */
-export function createConfigManager(config) {
+export function createConfigManager(config: ProxyConfig): ConfigManager {
   return {
     config,
 
     /**
      * Get the appropriate model based on request type
      */
-    getModel(thinking) {
+    getModel(thinking: boolean): string {
       return thinking ? config.models.reasoning : config.models.completion;
     },
 
     /**
      * Resolve model name through mappings
      */
-    resolveModel(modelName) {
-      return config.models.mappings?.[modelName] || modelName;
+    resolveModel(modelName: string): string {
+      const mapping = config.models.mappings?.[modelName];
+      if (typeof mapping === 'string') {
+        return mapping;
+      } else if (mapping && typeof mapping === 'object' && 'openRouterModel' in mapping) {
+        return (mapping as ModelConfig).openRouterModel;
+      }
+      return modelName;
     },
 
     /**
      * Get model configuration
      */
-    getModelConfig(modelName) {
+    getModelConfig(modelName: string): ModelConfig | null {
       const resolvedName = this.resolveModel(modelName);
-      return config.models.configs[resolvedName];
+      const modelConfig = config.models.configs[resolvedName];
+      
+      if (typeof modelConfig === 'string') {
+        // Simple string mapping, create a basic config
+        return {
+          openRouterModel: modelConfig,
+          supportsThinking: false
+        };
+      }
+      
+      return modelConfig as ModelConfig || null;
     },
 
     /**
      * Check if model supports thinking
      */
-    supportsThinking(modelName) {
+    supportsThinking(modelName: string): boolean {
       const modelConfig = this.getModelConfig(modelName);
       return modelConfig?.supportsThinking || false;
     },
@@ -258,8 +304,8 @@ export function createConfigManager(config) {
     /**
      * Get HTTP headers for OpenRouter requests
      */
-    getHeaders() {
-      const headers = {
+    getHeaders(): Record<string, string> {
+      const headers: Record<string, string> = {
         'Content-Type': 'application/json'
       };
       
@@ -275,12 +321,11 @@ export function createConfigManager(config) {
     },
 
     /**
-     * Get all enabled models
+     * Validate configuration
      */
-    getEnabledModels() {
-      return Object.entries(config.models.configs)
-        .filter(([, modelConfig]) => modelConfig.enabled)
-        .map(([modelName]) => modelName);
+    validateConfig(): void {
+      validateConfig(config as any, CONFIG_SCHEMA as any);
+      validateModelConfigs(config);
     }
   };
 }

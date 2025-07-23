@@ -2,6 +2,7 @@
  * Main request handler that orchestrates the proxy workflow
  */
 
+import type { FastifyRequest, FastifyReply } from 'fastify';
 import { transformRequest } from '../transformers/requestTransformer.js';
 import { handleNonStreamingResponse } from './nonStreamingHandler.js';
 import { handleStreamingResponse } from './streamingHandler.js';
@@ -12,13 +13,15 @@ import {
   handleTransformationError, 
   handleRouteError,
 } from '../utils/errorHandler.js';
+import type { AnthropicRequest } from '../types/index.js';
 
 /**
  * Handle /v1/messages POST requests
- * @param {Object} request - Fastify request object
- * @param {Object} reply - Fastify reply object
  */
-export async function handleMessagesRequest(request, reply) {
+export async function handleMessagesRequest(
+  request: FastifyRequest<{ Body: AnthropicRequest }>, 
+  reply: FastifyReply
+): Promise<void> {
   // Generate unique request ID and create per-request logger
   const requestId = generateRequestId();
   const logger = new RequestLogger(requestId);
@@ -26,12 +29,21 @@ export async function handleMessagesRequest(request, reply) {
   try {
     const payload = request.body;
     
+    // Convert headers to Record<string, string>
+    const stringHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(request.headers)) {
+      if (typeof value === 'string') {
+        stringHeaders[key] = value;
+      } else if (Array.isArray(value)) {
+        stringHeaders[key] = value.join(', ');
+      }
+    }
+    
     // Log the incoming request to request-specific file
-    logger.log({
-      type: 'incoming_request',
+    logger.info('Incoming request', {
       method: request.method,
       url: request.url,
-      headers: request.headers,
+      headers: stringHeaders,
       body: payload
     });
 
@@ -40,7 +52,7 @@ export async function handleMessagesRequest(request, reply) {
     try {
       openaiPayload = transformRequest(payload);
     } catch (error) {
-      throw handleTransformationError(error, 'request transformation');
+      throw handleTransformationError(error as Error, 'request transformation');
     }
 
     // Prepare headers and URL
@@ -48,8 +60,7 @@ export async function handleMessagesRequest(request, reply) {
     const url = `${config.api.baseUrl}/v1/chat/completions`;
     
     // Log the outgoing request to OpenRouter
-    logger.log({
-      type: 'outgoing_request',
+    logger.info('Outgoing request', {
       url,
       method: 'POST',
       headers,
@@ -71,15 +82,22 @@ export async function handleMessagesRequest(request, reply) {
 
     // Handle response based on streaming mode
     if (openaiPayload.stream) {
-      return await handleStreamingResponse(openaiResponse, reply, openaiPayload.model, logger);
+      await handleStreamingResponse(openaiResponse, reply, openaiPayload.model, logger);
+      return;
     } else {
-      return await handleNonStreamingResponse(openaiResponse, openaiPayload.messages, openaiPayload.model, logger);
+      const response = await handleNonStreamingResponse(openaiResponse, openaiPayload.messages, openaiPayload.model, logger);
+      reply.send(response);
+      return;
     }
 
   } catch (error) {
-    return handleRouteError(error, reply, logger);
+    const errorResponse = handleRouteError(error as Error, reply, logger);
+    if (errorResponse) {
+      reply.send(errorResponse);
+    }
+    return;
   } finally {
     // Always close the logger to free resources
-    logger.close();
+    await logger.close();
   }
 }

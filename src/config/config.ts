@@ -4,60 +4,53 @@
  */
 
 import { loadConfig, createConfigManager } from './configLoader.js';
+import type { ProxyConfig, ConfigManager, ModelConfig } from '../types/index.js';
 
-let configManager;
+let configManager: ConfigManager;
 
 try {
   const rawConfig = loadConfig();
   configManager = createConfigManager(rawConfig);
 } catch (error) {
-  console.error('Failed to load configuration:', error.message);
+  const err = error as Error;
+  console.error('Failed to load configuration:', err.message);
   process.exit(1);
 }
 
-export const config = configManager.config;
-export const manager = configManager;
+export const config: ProxyConfig = configManager.config;
+export const manager: ConfigManager = configManager;
 
 /**
  * Get the appropriate model based on request type
- * @param {boolean} thinking - Whether this is a reasoning request
- * @returns {string} - The model to use
  */
-export function getModel(thinking) {
+export function getModel(thinking: boolean): string {
   return configManager.getModel(thinking);
 }
 
 /**
  * Get HTTP headers for OpenRouter requests
- * @returns {Object} - Headers object
  */
-export function getHeaders() {
+export function getHeaders(): Record<string, string> {
   return configManager.getHeaders();
 }
 
 /**
  * Resolve model name through mappings
- * @param {string} modelName - Original model name
- * @returns {string} - Resolved model name
  */
-export function resolveModel(modelName) {
+export function resolveModel(modelName: string): string {
   return configManager.resolveModel(modelName);
 }
 
 /**
  * Get model configuration
- * @param {string} modelName - Model name
- * @returns {Object} - Model configuration
  */
-export function getModelConfig(modelName) {
+export function getModelConfig(modelName: string): ModelConfig | null {
   return configManager.getModelConfig(modelName);
 }
 
 /**
  * Check if model supports thinking
- * @param {string} modelName - Model name
- * @returns {boolean} - Whether model supports thinking
  */
-export function supportsThinking(modelName) {
+export function supportsThinking(modelName: string): boolean {
   return configManager.supportsThinking(modelName);
 }

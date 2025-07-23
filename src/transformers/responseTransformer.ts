@@ -3,17 +3,49 @@
  */
 
 import { mapStopReason, generateMessageId } from '../utils/sseUtils.js';
+import type { OpenAIMessage, AnthropicResponse } from '../types/index.js';
+
+interface OpenAIToolCall {
+  id: string;
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+interface AnthropicToolCall {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: any;
+}
+
+interface OpenAIUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
+interface OpenAIResponseData {
+  id: string;
+  choices: Array<{
+    message: {
+      role: string;
+      content: string;
+      tool_calls?: OpenAIToolCall[];
+    };
+    finish_reason: string;
+  }>;
+  usage?: OpenAIUsage;
+}
 
 /**
  * Transform OpenAI tool calls to Anthropic format
- * @param {Array} toolCalls - OpenAI tool calls
- * @returns {Array} - Anthropic format tool calls
  */
-function transformToolCallsToAnthropic(toolCalls) {
+function transformToolCallsToAnthropic(toolCalls?: OpenAIToolCall[]): AnthropicToolCall[] {
   if (!toolCalls || !Array.isArray(toolCalls)) return [];
   
   return toolCalls.map(toolCall => ({
-    type: 'tool_use',
+    type: 'tool_use' as const,
     id: toolCall.id,
     name: toolCall.function.name,
     input: JSON.parse(toolCall.function.arguments),
@@ -22,12 +54,12 @@ function transformToolCallsToAnthropic(toolCalls) {
 
 /**
  * Calculate token usage from messages or use provided usage
- * @param {Object} usage - OpenAI usage object
- * @param {Array} messages - Messages array for fallback calculation
- * @param {string} content - Response content for fallback calculation
- * @returns {Object} - Token usage object
  */
-function calculateTokenUsage(usage, messages = [], content = '') {
+function calculateTokenUsage(
+  usage?: OpenAIUsage, 
+  messages: OpenAIMessage[] = [], 
+  content: string = ''
+): { input_tokens: number; output_tokens: number } {
   if (usage) {
     return {
       input_tokens: usage.prompt_tokens,
@@ -51,19 +83,24 @@ function calculateTokenUsage(usage, messages = [], content = '') {
 
 /**
  * Transform OpenAI response to Anthropic format
- * @param {Object} data - OpenAI response data
- * @param {Array} messages - Original messages for token calculation
- * @param {string} model - Model used for the request
- * @returns {Object} - Anthropic format response
  */
-export function transformResponse(data, messages, model) {
+export function transformResponse(
+  data: OpenAIResponseData, 
+  messages: OpenAIMessage[], 
+  model: string
+): AnthropicResponse {
   const choice = data.choices[0];
+  if (!choice) {
+    throw new Error('No choices found in OpenAI response');
+  }
   const openaiMessage = choice.message;
   const stopReason = mapStopReason(choice.finish_reason);
   const toolCalls = transformToolCallsToAnthropic(openaiMessage.tool_calls);
   const messageId = generateMessageId(data.id);
   
-  const anthropicResponse = {
+  const tokenUsage = calculateTokenUsage(data.usage, messages, openaiMessage.content);
+  
+  const anthropicResponse: AnthropicResponse = {
     content: [
       {
         text: openaiMessage.content,
@@ -73,11 +110,13 @@ export function transformResponse(data, messages, model) {
     ],
     id: messageId,
     model: model,
-    role: openaiMessage.role,
+    role: 'assistant' as const,
     stop_reason: stopReason,
-    stop_sequence: null,
     type: 'message',
-    usage: calculateTokenUsage(data.usage, messages, openaiMessage.content),
+    usage: {
+      ...tokenUsage,
+      total_tokens: tokenUsage.input_tokens + tokenUsage.output_tokens
+    },
   };
 
   return anthropicResponse;

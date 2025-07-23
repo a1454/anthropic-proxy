@@ -12,7 +12,7 @@ const fastify = Fastify({
 fastify.post('/v1/messages', handleMessagesRequest);
 
 // Start the server
-const start = async () => {
+const start = async (): Promise<void> => {
   try {
     await fastify.listen({ port: config.server.port });
     console.log(`Server listening on port ${config.server.port}`);

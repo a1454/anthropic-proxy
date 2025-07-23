@@ -3,29 +3,40 @@
  */
 
 import { TextDecoder } from 'util';
+import type { FastifyReply } from 'fastify';
 import { debug } from '../utils/logger.js';
-import { ProxyError, ErrorTypes } from '../utils/errorHandler.js';
+import { ProxyError } from '../utils/errorHandler.js';
 import { StreamingResponseHandler } from './streaming/StreamingResponseHandler.js';
 import { StreamingStates } from './streaming/StreamStateManager.js';
+import type { RequestLogger } from '../utils/requestLogger.js';
 
 /**
  * Handle streaming response from OpenRouter
- * @param {Response} openaiResponse - Response from OpenRouter
- * @param {Object} reply - Fastify reply object
- * @param {string} model - Model used for the request
- * @param {RequestLogger} logger - Request-specific logger
  */
-export async function handleStreamingResponse(openaiResponse, reply, model, logger) {
+export async function handleStreamingResponse(
+  openaiResponse: Response, 
+  reply: FastifyReply, 
+  model: string, 
+  logger: RequestLogger
+): Promise<void> {
   // Log the successful streaming response headers
-  logger.log({
-    type: 'openrouter_streaming_response_start',
+  logger.info('OpenRouter streaming response start', {
     status: openaiResponse.status,
     headers: Object.fromEntries(openaiResponse.headers.entries()),
     model: model
   });
 
   const handler = new StreamingResponseHandler(reply, model, logger);
-  const reader = openaiResponse.body.getReader();
+  const reader = openaiResponse.body?.getReader();
+  
+  if (!reader) {
+    throw new ProxyError({
+      type: 'STREAMING_ERROR',
+      message: 'No response body reader available',
+      statusCode: 500
+    });
+  }
+
   const decoder = new TextDecoder('utf-8');
   let done = false;
 
@@ -62,14 +73,16 @@ export async function handleStreamingResponse(openaiResponse, reply, model, logg
     }
     
     // Create structured error for general streaming errors
-    throw new ProxyError(
-      `Streaming handler error: ${error.message}`,
-      ErrorTypes.STREAMING_ERROR,
-      500,
-      error
-    ).withContext({
-      ...handler.getHandlerState(),
-      type: 'streaming_handler_error'
+    throw new ProxyError({
+      type: 'STREAMING_ERROR',
+      message: `Streaming handler error: ${error instanceof Error ? error.message : String(error)}`,
+      statusCode: 500,
+      cause: error instanceof Error ? error : new Error(String(error)),
+      context: {
+        timestamp: Date.now(),
+        operation: 'streaming_handler',
+        ...handler.getHandlerState()
+      }
     });
   }
 
