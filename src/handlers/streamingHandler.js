@@ -4,7 +4,7 @@
 
 import { TextDecoder } from 'util';
 import { sendSSE, generateMessageId } from '../utils/sseUtils.js';
-import { debug, logRequest } from '../utils/logger.js';
+import { debug } from '../utils/logger.js';
 import { ProxyError, ErrorTypes } from '../utils/errorHandler.js';
 
 /**
@@ -22,9 +22,10 @@ const StreamingStates = {
  * Streaming response handler class with state machine
  */
 class StreamingResponseHandler {
-  constructor(reply, model) {
+  constructor(reply, model, logger) {
     this.reply = reply;
     this.model = model;
+    this.logger = logger;
     this.state = StreamingStates.INITIALIZING;
     this.isSucceeded = false;
     this.accumulatedContent = '';
@@ -215,7 +216,7 @@ class StreamingResponseHandler {
     this.state = StreamingStates.FINALIZING;
 
     // Log the complete streaming response
-    logRequest({
+    this.logger.log({
       type: 'streaming_response_complete',
       accumulated_content: this.accumulatedContent,
       accumulated_reasoning: this.accumulatedReasoning,
@@ -308,17 +309,18 @@ class StreamingResponseHandler {
  * @param {Response} openaiResponse - Response from OpenRouter
  * @param {Object} reply - Fastify reply object
  * @param {string} model - Model used for the request
+ * @param {RequestLogger} logger - Request-specific logger
  */
-export async function handleStreamingResponse(openaiResponse, reply, model) {
+export async function handleStreamingResponse(openaiResponse, reply, model, logger) {
   // Log the successful streaming response headers
-  logRequest({
+  logger.log({
     type: 'openrouter_streaming_response_start',
     status: openaiResponse.status,
     headers: Object.fromEntries(openaiResponse.headers.entries()),
     model: model
   });
 
-  const handler = new StreamingResponseHandler(reply, model);
+  const handler = new StreamingResponseHandler(reply, model, logger);
   const reader = openaiResponse.body.getReader();
   let done = false;
 

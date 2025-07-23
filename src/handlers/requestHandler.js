@@ -5,7 +5,7 @@
 import { transformRequest } from '../transformers/requestTransformer.js';
 import { handleNonStreamingResponse } from './nonStreamingHandler.js';
 import { handleStreamingResponse } from './streamingHandler.js';
-import { logRequest } from '../utils/logger.js';
+import { generateRequestId, RequestLogger } from '../utils/requestLogger.js';
 import { config, getHeaders } from '../config/config.js';
 import { 
   handleOpenRouterError, 
@@ -21,11 +21,15 @@ import {
  * @param {Object} reply - Fastify reply object
  */
 export async function handleMessagesRequest(request, reply) {
+  // Generate unique request ID and create per-request logger
+  const requestId = generateRequestId();
+  const logger = new RequestLogger(requestId);
+  
   try {
     const payload = request.body;
     
-    // Log the incoming request
-    logRequest({
+    // Log the incoming request to request-specific file
+    logger.log({
       type: 'incoming_request',
       method: request.method,
       url: request.url,
@@ -46,7 +50,7 @@ export async function handleMessagesRequest(request, reply) {
     const url = `${config.baseUrl}/v1/chat/completions`;
     
     // Log the outgoing request to OpenRouter
-    logRequest({
+    logger.log({
       type: 'outgoing_request',
       url,
       method: 'POST',
@@ -63,18 +67,21 @@ export async function handleMessagesRequest(request, reply) {
 
     // Handle error responses
     if (!openaiResponse.ok) {
-      const error = await handleOpenRouterError(openaiResponse);
+      const error = await handleOpenRouterError(openaiResponse, logger);
       throw error;
     }
 
     // Handle response based on streaming mode
     if (openaiPayload.stream) {
-      return await handleStreamingResponse(openaiResponse, reply, openaiPayload.model);
+      return await handleStreamingResponse(openaiResponse, reply, openaiPayload.model, logger);
     } else {
-      return await handleNonStreamingResponse(openaiResponse, openaiPayload.messages, openaiPayload.model);
+      return await handleNonStreamingResponse(openaiResponse, openaiPayload.messages, openaiPayload.model, logger);
     }
 
   } catch (error) {
-    return handleRouteError(error, reply);
+    return handleRouteError(error, reply, logger);
+  } finally {
+    // Always close the logger to free resources
+    logger.close();
   }
 }

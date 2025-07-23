@@ -3,7 +3,7 @@
  */
 
 import { transformResponse } from '../transformers/responseTransformer.js';
-import { logRequest, debug } from '../utils/logger.js';
+import { debug } from '../utils/logger.js';
 import { ProxyError, ErrorTypes } from '../utils/errorHandler.js';
 
 /**
@@ -11,14 +11,15 @@ import { ProxyError, ErrorTypes } from '../utils/errorHandler.js';
  * @param {Response} openaiResponse - Response from OpenRouter
  * @param {Array} messages - Original messages for token calculation
  * @param {string} model - Model used for the request
+ * @param {RequestLogger} logger - Request-specific logger
  * @returns {Object} - Anthropic format response
  */
-export async function handleNonStreamingResponse(openaiResponse, messages, model) {
+export async function handleNonStreamingResponse(openaiResponse, messages, model, logger) {
   const data = await openaiResponse.json();
   debug('OpenAI response:', data);
   
   // Log the successful response
-  logRequest({
+  logger.log({
     type: 'openrouter_success_response',
     status: openaiResponse.status,
     headers: Object.fromEntries(openaiResponse.headers.entries()),
@@ -43,7 +44,7 @@ export async function handleNonStreamingResponse(openaiResponse, messages, model
   const anthropicResponse = transformResponse(data, messages, model);
 
   // Log the final response being sent to client
-  logRequest({
+  logger.log({
     type: 'outgoing_response',
     body: anthropicResponse
   });

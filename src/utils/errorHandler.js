@@ -45,23 +45,22 @@ export class ProxyError extends Error {
  * @param {Response} response - OpenRouter response
  * @returns {ProxyError} - Structured error
  */
-export async function handleOpenRouterError(response) {
+export async function handleOpenRouterError(response, logger = null) {
   const errorDetails = await response.text();
   
-  // Log the error response
-  logRequest({
+  // Create error with context for centralized logging
+  return new ProxyError(
+    `OpenRouter API error: ${errorDetails}`,
+    ErrorTypes.EXTERNAL_API_ERROR,
+    response.status,
+    null
+  ).withContext({
     type: 'openrouter_error_response',
     status: response.status,
     statusText: response.statusText,
     headers: Object.fromEntries(response.headers.entries()),
     body: errorDetails
   });
-
-  return new ProxyError(
-    `OpenRouter API error: ${errorDetails}`,
-    ErrorTypes.EXTERNAL_API_ERROR,
-    response.status
-  );
 }
 
 /**
@@ -132,8 +131,9 @@ export function formatErrorResponse(error) {
  * Global error handler for Fastify routes
  * @param {Error} error - Error object
  * @param {Object} reply - Fastify reply object
+ * @param {RequestLogger} [logger] - Optional request-specific logger
  */
-export function handleRouteError(error, reply) {
+export function handleRouteError(error, reply, logger = null) {
   let proxyError;
 
   if (error instanceof ProxyError) {
@@ -163,8 +163,12 @@ export function handleRouteError(error, reply) {
     logEntry.stack = proxyError.originalError.stack;
   }
 
-  // Log the comprehensive error
-  logRequest(logEntry);
+  // Log the comprehensive error - use request logger if available, otherwise global logger
+  if (logger) {
+    logger.log(logEntry);
+  } else {
+    logRequest(logEntry);
+  }
 
   console.error('Route error:', proxyError);
 
