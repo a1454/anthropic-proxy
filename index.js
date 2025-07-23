@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 import Fastify from 'fastify';
 import { config } from './src/config/config.js';
-import { initializeLogger } from './src/utils/logger.js';
 import { handleMessagesRequest } from './src/handlers/requestHandler.js';
-
-// Initialize logging
-initializeLogger();
 
 // Create Fastify server
 const fastify = Fastify({

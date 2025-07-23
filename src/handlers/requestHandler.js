@@ -11,8 +11,6 @@ import {
   handleOpenRouterError, 
   handleTransformationError, 
   handleRouteError,
-  ProxyError,
-  ErrorTypes 
 } from '../utils/errorHandler.js';
 
 /**

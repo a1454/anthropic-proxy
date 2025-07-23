@@ -85,6 +85,13 @@ The streaming handler converts OpenRouter's OpenAI-format SSE to Anthropic forma
 - Supports both text content and tool calls in streaming
 - Manages thinking/reasoning deltas for reasoning models
 
+The streaming handler has been refactored into modular components:
+- **BufferManager**: Handles two-level buffering (line + JSON)
+- **SSEMessageBuilder**: Constructs SSE messages in Anthropic format
+- **ContentProcessor**: Processes content, tool calls, and reasoning deltas
+- **StreamStateManager**: Manages streaming state machine
+- **StreamingResponseHandler**: Orchestrates all components
+
 ### Error Handling Strategy
 - All handlers throw `ProxyError` instances with rich context
 - `handleRouteError()` provides centralized error logging and response
@@ -98,8 +105,15 @@ The streaming handler converts OpenRouter's OpenAI-format SSE to Anthropic forma
 │   ├── config/config.js              # Configuration management
 │   ├── handlers/
 │   │   ├── requestHandler.js         # Main request orchestration
-│   │   ├── streamingHandler.js       # SSE streaming with state machine
-│   │   └── nonStreamingHandler.js    # Non-streaming response handling
+│   │   ├── streamingHandler.js       # Streaming entry point (simplified)
+│   │   ├── nonStreamingHandler.js    # Non-streaming response handling
+│   │   └── streaming/                # Modular streaming components
+│   │       ├── BufferManager.js      # Two-level buffer management
+│   │       ├── SSEMessageBuilder.js  # SSE message construction
+│   │       ├── ContentProcessor.js   # Content/tool/reasoning processing
+│   │       ├── StreamStateManager.js # State machine management
+│   │       ├── StreamingResponseHandler.js # Main orchestrator
+│   │       └── index.js              # Module exports
 │   ├── transformers/
 │   │   ├── messageTransformer.js     # Message format conversion (critical)
 │   │   └── requestTransformer.js     # Request payload transformation

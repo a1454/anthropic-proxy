@@ -2,8 +2,6 @@
  * Structured error handling utilities
  */
 
-import { logRequest } from './logger.js';
-
 /**
  * Error types for structured error handling
  */
@@ -163,12 +161,11 @@ export function handleRouteError(error, reply, logger = null) {
     logEntry.stack = proxyError.originalError.stack;
   }
 
-  // Log the comprehensive error - use request logger if available, otherwise global logger
+  // Log the comprehensive error - use request logger if available
   if (logger) {
     logger.log(logEntry);
-  } else {
-    logRequest(logEntry);
   }
+  // Note: Errors without request logger are only logged to console
 
   console.error('Route error:', proxyError);
 
