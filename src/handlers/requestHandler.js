@@ -45,7 +45,7 @@ export async function handleMessagesRequest(request, reply) {
 
     // Prepare headers and URL
     const headers = getHeaders();
-    const url = `${config.baseUrl}/v1/chat/completions`;
+    const url = `${config.api.baseUrl}/v1/chat/completions`;
     
     // Log the outgoing request to OpenRouter
     logger.log({

@@ -1,30 +1,22 @@
 /**
  * Configuration settings for the Anthropic proxy server
+ * This module now loads configuration from JSON with environment overrides
  */
 
-export const config = {
-  // Server configuration
-  port: process.env.PORT || 3000,
-  
-  // API configuration  
-  baseUrl: process.env.ANTHROPIC_PROXY_BASE_URL || 'https://openrouter.ai/api',
-  requiresApiKey: !process.env.ANTHROPIC_PROXY_BASE_URL,
-  key: !process.env.ANTHROPIC_PROXY_BASE_URL ? process.env.OPENROUTER_API_KEY : null,
-  
-  // Model configuration
-  defaultModel: 'google/gemini-2.5-pro',
-  models: {
-    reasoning: process.env.REASONING_MODEL || 'google/gemini-2.5-pro',
-    completion: process.env.COMPLETION_MODEL || 'google/gemini-2.5-pro',
-  },
-  
-  // Logging configuration
-  logDir: 'log',
-  enableDebug: !!process.env.DEBUG,
-  
-  // Tool configuration
-  excludedTools: ['BatchTool'],
-};
+import { loadConfig, createConfigManager } from './configLoader.js';
+
+let configManager;
+
+try {
+  const rawConfig = loadConfig();
+  configManager = createConfigManager(rawConfig);
+} catch (error) {
+  console.error('Failed to load configuration:', error.message);
+  process.exit(1);
+}
+
+export const config = configManager.config;
+export const manager = configManager;
 
 /**
  * Get the appropriate model based on request type
@@ -32,7 +24,7 @@ export const config = {
  * @returns {string} - The model to use
  */
 export function getModel(thinking) {
-  return thinking ? config.models.reasoning : config.models.completion;
+  return configManager.getModel(thinking);
 }
 
 /**
@@ -40,13 +32,32 @@ export function getModel(thinking) {
  * @returns {Object} - Headers object
  */
 export function getHeaders() {
-  const headers = {
-    'Content-Type': 'application/json'
-  };
-  
-  if (config.requiresApiKey) {
-    headers['Authorization'] = `Bearer ${config.key}`;
-  }
-  
-  return headers;
+  return configManager.getHeaders();
+}
+
+/**
+ * Resolve model name through mappings
+ * @param {string} modelName - Original model name
+ * @returns {string} - Resolved model name
+ */
+export function resolveModel(modelName) {
+  return configManager.resolveModel(modelName);
+}
+
+/**
+ * Get model configuration
+ * @param {string} modelName - Model name
+ * @returns {Object} - Model configuration
+ */
+export function getModelConfig(modelName) {
+  return configManager.getModelConfig(modelName);
+}
+
+/**
+ * Check if model supports thinking
+ * @param {string} modelName - Model name
+ * @returns {boolean} - Whether model supports thinking
+ */
+export function supportsThinking(modelName) {
+  return configManager.supportsThinking(modelName);
 }

@@ -9,6 +9,6 @@ import { config } from '../config/config.js';
  * @param {...any} args - Arguments to log
  */
 export function debug(...args) {
-  if (!config.enableDebug) return;
+  if (!config.logging.enableDebug) return;
   console.log(...args);
 }

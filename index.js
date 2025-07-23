@@ -14,8 +14,8 @@ fastify.post('/v1/messages', handleMessagesRequest);
 // Start the server
 const start = async () => {
   try {
-    await fastify.listen({ port: config.port });
-    console.log(`Server listening on port ${config.port}`);
+    await fastify.listen({ port: config.server.port });
+    console.log(`Server listening on port ${config.server.port}`);
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);

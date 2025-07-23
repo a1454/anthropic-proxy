@@ -57,7 +57,7 @@ export class RequestLogger {
     const formattedDate = `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`;
     
     // Create directory structure: log/requests/YYYY-MM-DD/
-    const logDir = path.join(config.logDir, 'requests', formattedDate);
+    const logDir = path.join(config.logging.logDir, 'requests', formattedDate);
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
     }
@@ -109,7 +109,7 @@ export class RequestLogger {
  * @param {number} daysToKeep - Number of days to keep logs
  */
 export function cleanupOldLogs(daysToKeep = 30) {
-  const requestsDir = path.join(config.logDir, 'requests');
+  const requestsDir = path.join(config.logging.logDir, 'requests');
   if (!fs.existsSync(requestsDir)) return;
 
   const cutoffDate = new Date();

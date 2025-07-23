@@ -1,0 +1,49 @@
+{
+  "server": {
+    "port": 3000
+  },
+  "api": {
+    "baseUrl": "https://openrouter.ai/api",
+    "requiresApiKey": true
+  },
+  "models": {
+    "default": "google/gemini-2.5-pro",
+    "reasoning": "google/gemini-2.5-pro",
+    "completion": "google/gemini-2.5-pro",
+    "mappings": {
+      "claude-3-5-sonnet-20241022": "anthropic/claude-3.5-sonnet",
+      "claude-3-opus-20240229": "anthropic/claude-3-opus"
+    },
+    "configs": {
+      "google/gemini-2.5-pro": {
+        "enabled": true,
+        "maxTokens": 8192,
+        "supportsThinking": true,
+        "costPer1kTokens": 0.00125,
+        "description": "Google's Gemini 2.5 Pro model"
+      },
+      "anthropic/claude-3.5-sonnet": {
+        "enabled": true,
+        "maxTokens": 4096,
+        "supportsThinking": false,
+        "costPer1kTokens": 0.003,
+        "description": "Anthropic's Claude 3.5 Sonnet"
+      },
+      "anthropic/claude-3-opus": {
+        "enabled": true,
+        "maxTokens": 4096,
+        "supportsThinking": false,
+        "costPer1kTokens": 0.015,
+        "description": "Anthropic's Claude 3 Opus"
+      }
+    }
+  },
+  "logging": {
+    "logDir": "log",
+    "enableDebug": false,
+    "perRequestLogging": true
+  },
+  "tools": {
+    "excludedTools": ["BatchTool"]
+  }
+}

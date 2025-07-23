@@ -15,7 +15,7 @@ function transformTools(tools) {
   if (!tools || !Array.isArray(tools)) return [];
   
   return tools
-    .filter(tool => !config.excludedTools.includes(tool.name))
+    .filter(tool => !config.tools.excludedTools.includes(tool.name))
     .map(tool => ({
       type: 'function',
       function: {
